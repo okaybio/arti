@@ -312,8 +312,12 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
   .hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
 
-  /* ---------- Responsive (mobile) ---------- */
-  @media (max-width: 640px) {
+  /* ---------- Responsive (mobile / narrow) ---------- */
+  /* Breakpoint at 760px: the single-row desktop header needs ~700px, so
+     anything below that must use the wrapping two-row layout to avoid
+     horizontal overflow (covers large phones in landscape, foldables,
+     small tablets and split-screen windows). */
+  @media (max-width: 760px) {
     header.top {
       flex-wrap: wrap;
       gap: 8px;
