@@ -339,6 +339,15 @@
      which flexbox min-width handling does inconsistently across engines
      (notably iOS Safari). */
   @media (max-width: 760px) {
+    /* iOS Safari auto-zooms when a focused form control has font-size < 16px,
+       which enlarges the page past the viewport and produces phantom
+       horizontal + vertical scrollbars (the lock screen auto-focuses the
+       password field on load, so it happened immediately). Keep all controls
+       at >=16px on touch-sized screens to prevent the zoom. */
+    input, select, textarea, .field input, .search input,
+    .modal-body input[type=text], textarea.code, .select {
+      font-size: 16px;
+    }
     header.top {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto auto;
