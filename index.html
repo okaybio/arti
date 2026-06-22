@@ -21,7 +21,12 @@
     --shadow: 0 8px 30px rgba(0,0,0,.45);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow-x: clip; }
+  html, body { margin: 0; padding: 0; }
+  /* Clip horizontal overflow without breaking the sticky header: overflow:clip
+     (unlike overflow:hidden) does not turn html/body into a scroll container,
+     so position:sticky keeps working. No height:100% so the document itself is
+     the scroll container, which also avoids a mobile rotate reflow glitch. */
+  html, body { overflow-x: clip; }
   body {
     background: var(--bg);
     color: var(--text);
