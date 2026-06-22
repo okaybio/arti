@@ -31,7 +31,7 @@
     --shadow: 0 8px 30px rgba(0,0,0,.45);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; overscroll-behavior: none; }
+  html, body { margin: 0; padding: 0; overscroll-behavior: none; touch-action: manipulation; }
   /* No overflow-x:clip/hidden on the root: on iOS Safari that breaks the
      sticky header (WebKit treats it as a scroll container). Instead the
      layout is built so nothing exceeds the viewport width in the first place. */
@@ -468,6 +468,19 @@
 
 <script>
 "use strict";
+
+// iOS Safari ignores user-scalable=no / maximum-scale, so block zoom in JS:
+// pinch zoom fires iOS-only gesture* events; double-tap zoom is handled by
+// the CSS touch-action: manipulation.
+(function lockZoom() {
+  const stop = (e) => e.preventDefault();
+  document.addEventListener("gesturestart", stop, { passive: false });
+  document.addEventListener("gesturechange", stop, { passive: false });
+  document.addEventListener("gestureend", stop, { passive: false });
+  document.addEventListener("touchmove", (e) => {
+    if (e.touches && e.touches.length > 1) e.preventDefault();   // two-finger pinch
+  }, { passive: false });
+})();
 
 // ===================== Storage + crypto =====================
 const STORAGE_KEY = "arti.vault.v1";          // legacy localStorage key (auto-migrated)
