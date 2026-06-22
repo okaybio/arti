@@ -450,13 +450,68 @@
 <script>
 "use strict";
 
-// ===================== Crypto helpers =====================
-const STORAGE_KEY = "arti.vault.v1";
+// ===================== Storage + crypto =====================
+const STORAGE_KEY = "arti.vault.v1";          // legacy localStorage key (auto-migrated)
+const IDB_NAME = "arti", IDB_STORE = "kv", VAULT_ID = "vault";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+// chunked base64 so huge buffers don't blow the call stack (used for backups)
+const b64 = (bytes) => {
+  const u = new Uint8Array(bytes); let s = "";
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
 const ub64 = (str) => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+
+// ---- IndexedDB key/value store (large quota, unlike localStorage's ~5MB) ----
+let _dbPromise = null;
+function idb() {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((res, rej) => {
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return _dbPromise;
+}
+async function idbGet(key) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const t = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(key);
+    t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error);
+  });
+}
+async function idbSet(key, val) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(val, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new DOMException("aborted", "AbortError"));
+  });
+}
+async function idbDel(key) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+
+// ---- gzip compression (CompressionStream: Safari 16.4+, Chrome 80+); no-op fallback ----
+async function gzip(bytes) {
+  if (typeof CompressionStream === "undefined") return { data: bytes, comp: false };
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  return { data: new Uint8Array(await new Response(stream).arrayBuffer()), comp: true };
+}
+async function gunzip(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
 
 async function deriveKey(password, salt) {
   const baseKey = await crypto.subtle.importKey(
@@ -471,19 +526,11 @@ async function deriveKey(password, salt) {
   );
 }
 
-async function encryptObj(key, obj) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj))
-  );
-  return { iv: b64(iv), ct: b64(ct) };
-}
-
-async function decryptObj(key, ivB64, ctB64) {
-  const pt = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: ub64(ivB64) }, key, ub64(ctB64)
-  );
-  return JSON.parse(dec.decode(pt));
+function storageErr(e) {
+  const name = (e && e.name) || "";
+  if (name === "QuotaExceededError" || /quota|exceeded/i.test((e && e.message) || ""))
+    return "저장 공간이 부족합니다. 백업 후 일부 아티팩트를 삭제해 주세요.";
+  return "저장에 실패했습니다: " + ((e && e.message) || e);
 }
 
 // ===================== State =====================
@@ -497,15 +544,37 @@ let tagFilter = null;        // active tag, or null
 let selectMode = false;
 let selected = new Set();
 
-function readVault() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)); }
-  catch { return null; }
+// Internal vault shape: { v, salt:b64, iv:b64, comp:bool, ct:ArrayBuffer }
+async function readVault() {
+  const v = await idbGet(VAULT_ID);
+  if (v) return v;
+  // migrate legacy localStorage vault (v1: all-b64 strings, uncompressed)
+  try {
+    const old = localStorage.getItem(STORAGE_KEY);
+    if (old) {
+      const o = JSON.parse(old);
+      if (o && o.salt && o.iv && o.ct)
+        return { v: 1, salt: o.salt, iv: o.iv, comp: false, ct: ub64(o.ct).buffer };
+    }
+  } catch {}
+  return null;
 }
-function writeVault(v) { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); }
+async function writeVault(v) { await idbSet(VAULT_ID, v); }
 
 async function persist() {
-  const { iv, ct } = await encryptObj(cryptoKey, store);
-  writeVault({ v: 1, salt: saltB64, iv, ct });
+  const plain = enc.encode(JSON.stringify(store));
+  const { data, comp } = await gzip(plain);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, data);
+  await writeVault({ v: 2, salt: saltB64, iv: b64(iv), comp, ct });
+}
+
+async function decryptVault(key, vault) {
+  const ctBuf = vault.ct instanceof ArrayBuffer ? vault.ct : ub64(vault.ct).buffer;
+  const buf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ub64(vault.iv) }, key, ctBuf);
+  let bytes = new Uint8Array(buf);
+  if (vault.comp) bytes = await gunzip(bytes);
+  return JSON.parse(dec.decode(bytes));
 }
 
 // ===================== Lock screen logic =====================
@@ -513,8 +582,8 @@ const $ = (id) => document.getElementById(id);
 const lockEl = $("lock"), appEl = $("app");
 let isSetup = false;
 
-function initLockScreen() {
-  const vault = readVault();
+async function initLockScreen() {
+  const vault = await readVault();
   isSetup = !vault;
   if (isSetup) {
     $("lockTitle").textContent = "비밀번호 설정";
@@ -556,18 +625,22 @@ $("lockForm").addEventListener("submit", async (e) => {
       await persist();
       enterApp();
     } else {
-      const vault = readVault();
+      const vault = await readVault();
       saltB64 = vault.salt;
       const key = await deriveKey(pw, ub64(vault.salt));
       let data;
       try {
-        data = await decryptObj(key, vault.iv, vault.ct);
+        data = await decryptVault(key, vault);
       } catch {
         lockMsg("비밀번호가 올바르지 않습니다.", "error");
         return;
       }
       cryptoKey = key;
       store = data && data.artifacts ? data : { artifacts: [] };
+      // upgrade a legacy (localStorage / uncompressed) vault to IndexedDB + gzip
+      if (vault.v !== 2) {
+        try { await persist(); localStorage.removeItem(STORAGE_KEY); } catch {}
+      }
       enterApp();
     }
   } finally {
@@ -598,7 +671,8 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 
 async function addArtifact(a) {
   store.artifacts.unshift({ id: uid(), createdAt: Date.now(), ...a });
-  await persist();
+  try { await persist(); }
+  catch (e) { store.artifacts.shift(); renderGrid(); throw e; }   // roll back on quota/error
   renderGrid();
 }
 async function deleteArtifact(id) {
@@ -609,8 +683,10 @@ async function deleteArtifact(id) {
 async function updateArtifact(id, patch) {
   const a = store.artifacts.find(x => x.id === id);
   if (!a) return;
+  const backup = { ...a };
   Object.assign(a, patch, { updatedAt: Date.now() });
-  await persist();
+  try { await persist(); }
+  catch (e) { Object.assign(a, backup); renderGrid(); throw e; }  // roll back on quota/error
   renderGrid();
 }
 function parseTags(str) {
@@ -934,21 +1010,29 @@ function openAddModal() {
   $("mSave").onclick = async () => {
     const title = $("mTitle").value.trim();
     const tags = parseTags($("mTags").value);
+    let art;
     if (tab === "paste") {
       const code = $("mCode").value.trim();
       if (!code) { toast("HTML 코드를 입력하세요"); return; }
-      await addArtifact({ type: "html", title: title || "붙여넣은 아티팩트", content: code, tags });
+      art = { type: "html", title: title || "붙여넣은 아티팩트", content: code, tags };
     } else if (tab === "upload") {
       if (!fileContent) { toast("파일을 선택하세요"); return; }
-      await addArtifact({ type: "html", title: title || fileName.replace(/\.html?$/i, ""), content: fileContent, tags });
+      art = { type: "html", title: title || fileName.replace(/\.html?$/i, ""), content: fileContent, tags };
     } else {
       let url = $("mUrl").value.trim();
       if (!url) { toast("URL을 입력하세요"); return; }
       if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-      await addArtifact({ type: "link", title: title || url, content: url, tags });
+      art = { type: "link", title: title || url, content: url, tags };
     }
-    closeModal();
-    toast("추가됨 ✓");
+    $("mSave").disabled = true;
+    try {
+      await addArtifact(art);
+      closeModal();
+      toast("추가됨 ✓");
+    } catch (e) {
+      $("mSave").disabled = false;
+      toast(storageErr(e));
+    }
   };
 
   setTimeout(() => $("mTitle").focus(), 50);
@@ -984,13 +1068,19 @@ function openEditModal(a) {
     let content = $("eContent").value.trim();
     if (!content) { toast("내용을 입력하세요"); return; }
     if (isLink && !/^https?:\/\//i.test(content)) content = "https://" + content;
-    await updateArtifact(a.id, {
-      title: $("eTitle").value.trim() || "(제목 없음)",
-      tags: parseTags($("eTags").value),
-      content
-    });
-    closeModal();
-    toast("수정됨 ✓");
+    $("mSave").disabled = true;
+    try {
+      await updateArtifact(a.id, {
+        title: $("eTitle").value.trim() || "(제목 없음)",
+        tags: parseTags($("eTags").value),
+        content
+      });
+      closeModal();
+      toast("수정됨 ✓");
+    } catch (e) {
+      $("mSave").disabled = false;
+      toast(storageErr(e));
+    }
   };
   setTimeout(() => $("eTitle").focus(), 50);
 }
@@ -1012,16 +1102,21 @@ function openMenu() {
         <button class="btn" id="optChangePw" style="margin-top:8px">🔑 비밀번호 변경</button>
         <button class="btn" id="optLock">🔒 지금 잠그기</button>
         <button class="btn danger" id="optWipe" style="margin-top:8px">⚠ 이 브라우저에서 전체 삭제</button>
-        <div class="hint">이 기기의 localStorage에 저장된 모든 데이터를 지웁니다. 백업이 없으면 복구 불가.</div>
+        <div class="hint">이 기기(브라우저)에 저장된 모든 데이터를 지웁니다. 백업이 없으면 복구 불가.</div>
       </div>
     </div>`;
   document.body.appendChild(modalEl);
   modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
   $("mClose").onclick = closeModal;
 
-  $("optExport").onclick = () => {
-    const vault = readVault();
-    const blob = new Blob([JSON.stringify(vault)], { type: "application/json" });
+  $("optExport").onclick = async () => {
+    const vault = await readVault();
+    if (!vault) { toast("내보낼 데이터가 없습니다"); return; }
+    const out = {
+      v: vault.v || 2, salt: vault.salt, iv: vault.iv, comp: !!vault.comp,
+      ct: vault.ct instanceof ArrayBuffer ? b64(vault.ct) : vault.ct
+    };
+    const blob = new Blob([JSON.stringify(out)], { type: "application/json" });
     triggerDownload(blob, `artifact-gallery-backup-${fmtDate(Date.now())}.json`);
     toast("백업 내보냄 (암호화됨)");
   };
@@ -1032,24 +1127,30 @@ function openMenu() {
       const file = input.files[0]; if (!file) return;
       const reader = new FileReader();
       reader.onload = async () => {
+        let list;
         try {
           const data = JSON.parse(reader.result);
-          const list = Array.isArray(data) ? data : data.artifacts;
+          list = Array.isArray(data) ? data : data.artifacts;
           if (!Array.isArray(list)) throw new Error();
-          let n = 0;
-          for (const it of list) {
-            if (!it.content || !it.type) continue;
-            store.artifacts.unshift({
-              id: uid(), createdAt: it.createdAt || Date.now(),
-              type: it.type, title: it.title || "(제목 없음)",
-              content: it.content, tags: Array.isArray(it.tags) ? it.tags : []
-            });
-            n++;
-          }
+        } catch { toast("올바른 JSON이 아닙니다"); return; }
+        let n = 0;
+        for (const it of list) {
+          if (!it.content || !it.type) continue;
+          store.artifacts.unshift({
+            id: uid(), createdAt: it.createdAt || Date.now(),
+            type: it.type, title: it.title || "(제목 없음)",
+            content: it.content, tags: Array.isArray(it.tags) ? it.tags : []
+          });
+          n++;
+        }
+        try {
           await persist();
           closeModal(); renderGrid();
           toast(`${n}개 가져옴 ✓`);
-        } catch { toast("올바른 JSON이 아닙니다"); }
+        } catch (e) {
+          store.artifacts.splice(0, n); renderGrid();   // roll back the import
+          toast(storageErr(e));
+        }
       };
       reader.readAsText(file);
     };
@@ -1057,8 +1158,9 @@ function openMenu() {
   };
   $("optLock").onclick = () => { closeModal(); lockApp(); };
   $("optChangePw").onclick = () => { closeModal(); openChangePw(); };
-  $("optWipe").onclick = () => {
+  $("optWipe").onclick = async () => {
     if (confirm("정말 이 브라우저의 모든 데이터를 삭제할까요? 백업이 없으면 복구할 수 없습니다.")) {
+      try { await idbDel(VAULT_ID); } catch {}
       localStorage.removeItem(STORAGE_KEY);
       closeModal(); lockApp();
       toast("삭제 완료");
@@ -1092,11 +1194,17 @@ function openChangePw() {
     if (p1.length < 4) { toast("4자 이상으로 설정하세요"); return; }
     if (p1 !== p2) { toast("비밀번호가 일치하지 않습니다"); return; }
     const salt = crypto.getRandomValues(new Uint8Array(16));
+    const prevSalt = saltB64, prevKey = cryptoKey;
     saltB64 = b64(salt);
     cryptoKey = await deriveKey(p1, salt);
-    await persist();
-    closeModal();
-    toast("비밀번호 변경됨 ✓");
+    try {
+      await persist();
+      closeModal();
+      toast("비밀번호 변경됨 ✓");
+    } catch (e) {
+      saltB64 = prevSalt; cryptoKey = prevKey;   // keep old key usable
+      toast(storageErr(e));
+    }
   };
 }
 
@@ -1107,13 +1215,15 @@ $("importVaultLink").addEventListener("click", () => {
   input.onchange = () => {
     const file = input.files[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
-        const vault = JSON.parse(reader.result);
-        if (!vault.salt || !vault.iv || !vault.ct) throw new Error("형식 오류");
-        if (readVault() && !confirm("현재 이 브라우저의 데이터를 백업 내용으로 덮어씁니다. 계속할까요?")) return;
-        writeVault(vault);
-        initLockScreen();
+        const o = JSON.parse(reader.result);
+        if (!o.salt || !o.iv || !o.ct) throw new Error("형식 오류");
+        const vault = { v: o.v || 1, salt: o.salt, iv: o.iv, comp: !!o.comp, ct: ub64(o.ct).buffer };
+        if ((await readVault()) && !confirm("현재 이 브라우저의 데이터를 백업 내용으로 덮어씁니다. 계속할까요?")) return;
+        await writeVault(vault);
+        localStorage.removeItem(STORAGE_KEY);
+        await initLockScreen();
         lockMsg("복원 완료. 백업의 비밀번호로 잠금 해제하세요.", "ok");
       } catch {
         lockMsg("올바른 백업 파일이 아닙니다.", "error");
@@ -1134,8 +1244,8 @@ function toast(msg) {
 }
 
 // ===================== Boot =====================
-if (!window.crypto || !crypto.subtle) {
-  document.body.innerHTML = '<div style="padding:40px;text-align:center">이 브라우저는 WebCrypto를 지원하지 않습니다. HTTPS 환경의 최신 브라우저를 사용하세요.</div>';
+if (!window.crypto || !crypto.subtle || !window.indexedDB) {
+  document.body.innerHTML = '<div style="padding:40px;text-align:center">이 브라우저는 WebCrypto / IndexedDB를 지원하지 않습니다. HTTPS 환경의 최신 브라우저를 사용하세요.</div>';
 } else {
   initLockScreen();
 }
