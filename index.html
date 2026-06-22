@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#0d1117" />
 <title>Artifact Gallery</title>
@@ -31,7 +31,7 @@
     --shadow: 0 8px 30px rgba(0,0,0,.45);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
+  html, body { margin: 0; padding: 0; overscroll-behavior: none; }
   /* No overflow-x:clip/hidden on the root: on iOS Safari that breaks the
      sticky header (WebKit treats it as a scroll container). Instead the
      layout is built so nothing exceeds the viewport width in the first place. */
