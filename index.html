@@ -328,9 +328,10 @@
     /* full-width line break: forces search row onto its own line */
     header.top .spacer { order: 4; flex-basis: 100%; height: 0; }
     /* Row 2: search fills width, sort + select sit beside it */
-    .search { order: 5; flex: 1 1 auto; max-width: none; min-width: 0; }
-    #sortSelect { order: 6; }
-    #selectBtn { order: 7; }
+    .search { order: 5; flex: 1 1 60px; max-width: none; min-width: 0; }
+    .search input { min-width: 0; }
+    #sortSelect { order: 6; flex: 0 0 auto; }
+    #selectBtn { order: 7; flex: 0 0 auto; }
 
     .bulk-bar { top: auto; }
     .filter-bar, .bulk-bar { padding-left: 12px; padding-right: 12px; }
