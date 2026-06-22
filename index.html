@@ -873,9 +873,29 @@ $("sortSelect").addEventListener("change", (e) => { sortMode = e.target.value; r
 function openArtifact(a) {
   if (a.type === "link") { window.open(a.content, "_blank", "noopener"); return; }
   $("viewerTitle").textContent = a.title || "(제목 없음)";
-  $("viewerFrame").srcdoc = a.content;
+  setViewerContent(a.content);
   $("viewer").dataset.id = a.id;
   $("viewer").classList.remove("hidden");
+}
+
+// Render the artifact via a blob: URL rather than srcdoc. A srcdoc document
+// has no URL of its own, so in-page "#" anchor links resolve against the
+// parent (gallery) URL and reload the app — its lock screen then appears
+// inside the artifact. A blob: URL gives the document its own base, so "#"
+// links stay within the artifact.
+let viewerBlobUrl = null;
+function setViewerContent(html) {
+  const f = $("viewerFrame");
+  if (viewerBlobUrl) { URL.revokeObjectURL(viewerBlobUrl); viewerBlobUrl = null; }
+  const blob = new Blob([html], { type: "text/html" });
+  viewerBlobUrl = URL.createObjectURL(blob);
+  f.removeAttribute("srcdoc");
+  f.src = viewerBlobUrl;
+}
+function clearViewerContent() {
+  const f = $("viewerFrame");
+  f.src = "about:blank";
+  if (viewerBlobUrl) { URL.revokeObjectURL(viewerBlobUrl); viewerBlobUrl = null; }
 }
 
 function downloadArtifact(a) {
@@ -906,7 +926,7 @@ function confirmDelete(a) {
 // Viewer controls
 $("viewerBack").addEventListener("click", () => {
   $("viewer").classList.add("hidden");
-  $("viewerFrame").srcdoc = "";
+  clearViewerContent();
 });
 $("viewerNewTab").addEventListener("click", () => {
   const a = store.artifacts.find(x => x.id === $("viewer").dataset.id);
