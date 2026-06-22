@@ -311,6 +311,40 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
   .hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
+
+  /* ---------- Responsive (mobile) ---------- */
+  @media (max-width: 640px) {
+    header.top {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 12px;
+    }
+    /* Row 1: brand pushes action buttons to the right */
+    .brand { order: 1; flex: 1; min-width: 0; font-size: 15px; }
+    .brand span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #addBtn { order: 2; }
+    #menuBtn { order: 3; }
+    .count-pill { display: none; }
+    /* full-width line break: forces search row onto its own line */
+    header.top .spacer { order: 4; flex-basis: 100%; height: 0; }
+    /* Row 2: search fills width, sort + select sit beside it */
+    .search { order: 5; flex: 1 1 auto; max-width: none; min-width: 0; }
+    #sortSelect { order: 6; }
+    #selectBtn { order: 7; }
+
+    .bulk-bar { top: auto; }
+    .filter-bar, .bulk-bar { padding-left: 12px; padding-right: 12px; }
+
+    main { padding: 16px 12px 60px; }
+    .grid {
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+      gap: 14px;
+    }
+
+    .viewer-bar { gap: 8px; padding: 10px 12px; }
+    .viewer-bar .vtitle { flex: 1; min-width: 0; }
+    #viewerNewTab { white-space: nowrap; }
+  }
 </style>
 </head>
 <body>
