@@ -411,6 +411,27 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
   .hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
 
+  /* ---------- Arrange (drag) mode ---------- */
+  @keyframes jiggle { 0% { transform: rotate(-1.1deg); } 50% { transform: rotate(1.1deg); } 100% { transform: rotate(-1.1deg); } }
+  #app.arrange .card, #app.arrange .list-row { animation: jiggle .28s ease-in-out infinite; touch-action: none; }
+  #app.arrange .card:hover { transform: none; }
+  #app.arrange main { padding-bottom: 80px; }
+  .drag-ghost {
+    position: fixed; z-index: 300; pointer-events: none; opacity: .93;
+    box-shadow: var(--shadow); border-radius: var(--radius); overflow: hidden;
+    animation: none !important;
+  }
+  .drag-source { opacity: .35; }
+  .drop-merge { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
+  .tag-chip.drop-into { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .arrange-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 16px; background: var(--accent); color: var(--on-accent);
+    font-size: 13.5px; font-weight: 600; box-shadow: 0 -4px 20px rgba(0,0,0,.28);
+  }
+  .arrange-bar .btn { background: var(--on-accent); color: var(--accent); border: none; font-weight: 700; }
+
   /* ---------- Responsive (mobile / narrow) ---------- */
   /* Breakpoint at 760px: the single-row desktop header needs ~700px, so below
      that we switch to a deterministic two-row CSS grid. Grid (rather than
@@ -508,6 +529,7 @@
       <option value="new">최신순</option>
       <option value="old">오래된순</option>
       <option value="title">이름순</option>
+      <option value="manual">내 순서</option>
     </select>
     <button class="btn" id="selectBtn">☑ 선택</button>
     <button class="btn primary" id="addBtn">＋ 추가</button>
@@ -1071,6 +1093,7 @@ function visibleArtifacts() {
     if (tagFilter && !(a.tags || []).includes(tagFilter)) return false;
     return true;
   });
+  if (sortMode === "manual") return items;   // keep store.artifacts array order (manual)
   if (sortMode === "new") items.sort((a, b) => b.createdAt - a.createdAt);
   else if (sortMode === "old") items.sort((a, b) => a.createdAt - b.createdAt);
   else if (sortMode === "title") items.sort((a, b) => (a.title || "").localeCompare(b.title || "", "ko"));
@@ -1106,6 +1129,7 @@ function renderGrid() {
       const isLink = a.type === "link";
       const row = document.createElement("div");
       row.className = "list-row" + (selected.has(a.id) ? " selected" : "");
+      row.dataset.id = a.id;
       const selBox = selectMode
         ? `<div class="sel-box" style="position:static"><input type="checkbox" data-sel="${a.id}" ${selected.has(a.id) ? "checked" : ""}></div>` : "";
       const pinBtn = selectMode ? ""
@@ -1130,6 +1154,7 @@ function renderGrid() {
   for (const a of items) {
     const card = document.createElement("div");
     card.className = "card" + (selectMode ? " selectable" : "") + (selected.has(a.id) ? " selected" : "");
+    card.dataset.id = a.id;
     const isLink = a.type === "link";
     const badge = isLink ? "🔗 링크" : "📄 HTML";
 
@@ -1175,6 +1200,7 @@ function renderGrid() {
 
 // Grid click delegation
 $("grid").addEventListener("click", (e) => {
+  if (arrangeMode || justDragged) return;   // ignore taps while arranging / right after a drag
   const selCb = e.target.closest("[data-sel]");
   if (selCb) { toggleSelect(selCb.dataset.sel); return; }
 
@@ -1673,6 +1699,8 @@ function openMenu() {
           <option value="dark">다크</option>
           <option value="light">라이트</option>
         </select>
+        <button class="btn" id="optArrange" style="margin-top:8px">↕ 정렬 편집 (끌어서 이동·겹쳐서 폴더)</button>
+        <div class="hint">아이콘을 길게 눌러도 진입합니다. 끌어서 순서 변경, 다른 항목 위에 겹치면 폴더 생성, 폴더 칩에 드롭하면 이동.</div>
         <button class="btn" id="optExport" style="margin-top:8px">⬇ 암호화 백업 내보내기</button>
         <div class="hint">전체 갤러리를 암호화된 파일 하나로 저장합니다. 다른 기기에서 잠금화면의 "백업 파일에서 복원"으로 가져오면 동기화돼요.</div>
         <button class="btn" id="optImport" style="margin-top:8px">⬆ 아티팩트 가져오기 (JSON)</button>
@@ -1697,6 +1725,8 @@ function openMenu() {
 
   $("optTheme").value = localStorage.getItem("arti.theme") === "light" ? "light" : "dark";
   $("optTheme").onchange = (e) => setTheme(e.target.value);
+
+  $("optArrange").onclick = () => { closeModal(); setArrange(true); };
 
   $("optExport").onclick = async () => {
     const vault = await readVault();
@@ -1831,6 +1861,184 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
 }
+
+// ===================== Arrange (drag) mode =====================
+// Drop one item onto another -> create a folder with both (priority 1).
+// Drop onto a folder chip -> move into it (priority 2). Drag between items
+// -> reorder (priority 3, "내 순서"). Works with touch + mouse via Pointer Events.
+let arrangeMode = false;
+let justDragged = false;
+let press = null;          // pending press / active drag state
+const LP_MS = 420, MOVE_CANCEL = 12, DRAG_START = 6;
+
+function setArrange(on) {
+  arrangeMode = on;
+  appEl.classList.toggle("arrange", on);
+  let bar = document.getElementById("arrangeBar");
+  if (on) {
+    if (sortMode !== "manual") { sortMode = "manual"; const s = $("sortSelect"); if (s) s.value = "manual"; }
+    if (selectMode) setSelectMode(false);
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "arrangeBar"; bar.className = "arrange-bar";
+      bar.innerHTML = `<span>정렬 편집 — 끌어서 이동 · 겹쳐서 폴더</span><button class="btn sm" id="arrangeDone">완료</button>`;
+      document.body.appendChild(bar);
+      bar.querySelector("#arrangeDone").onclick = () => setArrange(false);
+    }
+  } else if (bar) { bar.remove(); }
+  renderGrid();
+}
+
+function clearDropHints() {
+  document.querySelectorAll(".drop-merge").forEach(el => el.classList.remove("drop-merge"));
+  document.querySelectorAll(".tag-chip.drop-into").forEach(el => el.classList.remove("drop-into"));
+}
+
+$("grid").addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (selectMode) return;
+  const itemEl = e.target.closest(".card, .list-row");
+  if (!itemEl || !itemEl.dataset.id) return;
+  if (!arrangeMode && e.target.closest("button, a, input, select, textarea")) return; // let controls work
+  press = { id: itemEl.dataset.id, itemEl, x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY,
+            pointerId: e.pointerId, dragging: false, timer: null, dropTarget: null };
+  if (!arrangeMode) press.timer = setTimeout(() => longPressFire(), LP_MS);
+});
+
+function longPressFire() {
+  if (!press || press.dragging) return;
+  if (Math.hypot(press.lastX - press.x, press.lastY - press.y) > MOVE_CANCEL) return;
+  if (!arrangeMode) setArrange(true);              // rebuilds grid (jiggle)
+  press.itemEl = $("grid").querySelector(`[data-id="${press.id}"]`) || press.itemEl;
+  if (press.itemEl) beginDrag();
+}
+
+document.addEventListener("pointermove", (e) => {
+  if (!press) return;
+  press.lastX = e.clientX; press.lastY = e.clientY;
+  if (!press.dragging) {
+    const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+    if (!arrangeMode) { if (moved > MOVE_CANCEL) { clearTimeout(press.timer); press = null; } return; }
+    if (moved > DRAG_START) beginDrag(); else return;
+  }
+  e.preventDefault();
+  dragMove(e);
+}, { passive: false });
+
+document.addEventListener("pointerup", endPress);
+document.addEventListener("pointercancel", endPress);
+
+function beginDrag() {
+  press.dragging = true;
+  const el = press.itemEl, r = el.getBoundingClientRect();
+  press.offX = press.lastX - r.left; press.offY = press.lastY - r.top;
+  const g = el.cloneNode(true);
+  g.classList.add("drag-ghost");
+  g.style.width = r.width + "px"; g.style.left = r.left + "px"; g.style.top = r.top + "px";
+  document.body.appendChild(g);
+  press.ghost = g;
+  el.classList.add("drag-source");
+}
+
+function cancelDwell() {
+  if (press.dwellTimer) { clearTimeout(press.dwellTimer); press.dwellTimer = null; }
+  press.dwellId = null; press.merge = null;
+}
+function reorderDom(over, e) {
+  const ir = over.getBoundingClientRect();
+  const before = e.clientY < ir.top + ir.height / 2;
+  over.parentNode.insertBefore(press.itemEl, before ? over : over.nextSibling);
+}
+function dragMove(e) {
+  const g = press.ghost;
+  g.style.left = (e.clientX - press.offX) + "px";
+  g.style.top = (e.clientY - press.offY) + "px";
+  const vh = window.innerHeight;                       // auto-scroll near edges
+  if (e.clientY < 90) window.scrollBy(0, -14);
+  else if (e.clientY > vh - 90) window.scrollBy(0, 14);
+
+  g.style.display = "none";
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  g.style.display = "";
+  clearDropHints();
+
+  // priority 2: drop onto a folder chip
+  const chip = under && under.closest("#folderBar [data-scope]");
+  if (chip) {
+    const sc = chip.dataset.scope;
+    if (sc !== "ALL" && sc !== "__none__") { chip.classList.add("drop-into"); cancelDwell(); press.dropTarget = { type: "folder", id: sc }; return; }
+  }
+
+  const over = under && under.closest(".card, .list-row");
+  if (!over || !over.dataset.id || over.dataset.id === press.id) { cancelDwell(); press.dropTarget = { type: "reorder" }; return; }
+
+  const ir = over.getBoundingClientRect();
+  const cx = ir.left + ir.width / 2, cy = ir.top + ir.height / 2;
+  const inCenter = Math.abs(e.clientX - cx) < ir.width * 0.32 && Math.abs(e.clientY - cy) < ir.height * 0.4;
+
+  // default = live reorder; dwelling on an item's center arms folder-merge (iOS-style)
+  if (inCenter) {
+    if (press.dwellId !== over.dataset.id) {
+      cancelDwell();
+      press.dwellId = over.dataset.id;
+      press.dwellTimer = setTimeout(() => {
+        press.merge = press.dwellId;
+        press.dropTarget = { type: "merge", id: press.merge };   // arm even if pointer stays still
+        const el = $("grid").querySelector('[data-id="' + press.merge + '"]');
+        if (el) el.classList.add("drop-merge");
+      }, 500);
+    }
+    if (press.merge === over.dataset.id) { over.classList.add("drop-merge"); press.dropTarget = { type: "merge", id: over.dataset.id }; return; }
+  } else {
+    cancelDwell();
+  }
+  press.dropTarget = { type: "reorder" };
+  reorderDom(over, e);
+}
+
+function endPress() {
+  if (!press) return;
+  clearTimeout(press.timer);
+  if (press.dwellTimer) clearTimeout(press.dwellTimer);
+  const p = press; press = null;
+  if (!p.dragging) return;
+  if (p.ghost) p.ghost.remove();
+  p.itemEl && p.itemEl.classList.remove("drag-source");
+  clearDropHints();
+  justDragged = true; setTimeout(() => { justDragged = false; }, 80);
+  const dt = p.dropTarget || { type: "reorder" };
+  if (dt.type === "folder") {
+    moveArtifacts([p.id], dt.id).then(() => { toast("폴더로 이동"); renderGrid(); });
+  } else if (dt.type === "merge") {
+    mergeIntoFolder(p.id, dt.id);
+  } else {
+    commitDomOrder();
+  }
+}
+
+async function mergeIntoFolder(srcId, targetId) {
+  const parent = (currentCollection !== "ALL" && currentCollection !== null) ? currentCollection : null;
+  const c = await createCollection("새 폴더", parent);
+  if (!c) { renderGrid(); return; }
+  await moveArtifacts([srcId, targetId], c.id);
+  setCollection(c.id);                                // navigate into the new folder
+  toast('폴더 생성 — 이름은 "✎ 폴더명/삭제"에서 변경');
+}
+
+function commitDomOrder() {
+  const gridEl = $("grid");
+  const domIds = [...gridEl.children].map(el => el.dataset && el.dataset.id).filter(Boolean);
+  if (!domIds.length) { renderGrid(); return; }
+  const visible = new Set(domIds);
+  const seq = domIds.map(id => store.artifacts.find(a => a.id === id));
+  let i = 0;
+  store.artifacts = store.artifacts.map(a => visible.has(a.id) ? seq[i++] : a);
+  if (sortMode !== "manual") { sortMode = "manual"; $("sortSelect").value = "manual"; }
+  persist().then(() => renderGrid()).catch(e => { toast(storageErr(e)); renderGrid(); });
+}
+
+// Suppress iOS long-press context menu / image save on cards while usable
+$("grid").addEventListener("contextmenu", (e) => { if (arrangeMode || press) e.preventDefault(); });
 
 // ===================== Boot =====================
 if (!window.crypto || !crypto.subtle || !window.indexedDB) {
