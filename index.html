@@ -26,23 +26,43 @@
     --text-dim: #8b949e;
     --accent: #6e9eff;
     --accent-hover: #84b0ff;
+    --on-accent: #0b1020;
     --danger: #f87171;
+    --danger-bg: #2a1818;
+    --danger-border: #5c2b2b;
+    --danger-bg-hover: #3a1f1f;
     --green: #3fb950;
+    --glass: rgba(13,17,23,.85);
+    --chip: rgba(20,25,33,.9);
+    --btn-hover: #232a33;
+    --btn-hover-border: #3a424e;
+    --thumb-bg: #0a0d12;
+    --lock-bg: radial-gradient(1200px 600px at 50% -10%, #16203a 0%, var(--bg) 55%);
     --radius: 12px;
     --shadow: 0 8px 30px rgba(0,0,0,.45);
   }
   :root[data-theme="light"] {
-    --bg: #f6f8fa;
+    --bg: #eef1f6;
     --bg-elev: #ffffff;
-    --bg-elev2: #eef1f5;
-    --border: #d6dbe2;
-    --text: #1c2128;
-    --text-dim: #5b6573;
-    --accent: #3b6fe0;
-    --accent-hover: #2f60cc;
-    --danger: #d63b3b;
-    --green: #1a8a3a;
-    --shadow: 0 8px 30px rgba(80,100,140,.18);
+    --bg-elev2: #e7ebf1;
+    --border: #d3d9e2;
+    --text: #1b2330;
+    --text-dim: #5a6675;
+    --accent: #3b6ef0;
+    --accent-hover: #2f5fe0;
+    --on-accent: #ffffff;
+    --danger: #cf3636;
+    --danger-bg: #fdeaea;
+    --danger-border: #f0c2c2;
+    --danger-bg-hover: #fbdada;
+    --green: #1a8f3c;
+    --glass: rgba(255,255,255,.82);
+    --chip: rgba(255,255,255,.9);
+    --btn-hover: #dce3ec;
+    --btn-hover-border: #c3ccd8;
+    --thumb-bg: #eef1f6;
+    --lock-bg: radial-gradient(1200px 600px at 50% -10%, #dbe6ff 0%, var(--bg) 60%);
+    --shadow: 0 6px 24px rgba(70,90,130,.16);
     color-scheme: light;
   }
   * { box-sizing: border-box; }
@@ -75,12 +95,12 @@
     font-weight: 500;
     transition: background .15s, border-color .15s, transform .05s;
   }
-  .btn:hover { background: #232a33; border-color: #3a424e; }
+  .btn:hover { background: var(--btn-hover); border-color: var(--btn-hover-border); }
   .btn:active { transform: translateY(1px); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
   .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-  .btn.danger { color: var(--danger); border-color: #5c2b2b; background: #2a1818; }
-  .btn.danger:hover { background: #3a1f1f; }
+  .btn.danger { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+  .btn.danger:hover { background: var(--danger-bg-hover); }
   .btn.ghost { background: transparent; border-color: transparent; }
   .btn.ghost:hover { background: var(--bg-elev2); }
   .btn.sm { padding: 6px 10px; font-size: 13px; }
@@ -91,7 +111,7 @@
   #lock {
     position: fixed; inset: 0;
     display: flex; align-items: center; justify-content: center;
-    background: radial-gradient(1200px 600px at 50% -10%, #16203a 0%, var(--bg) 55%);
+    background: var(--lock-bg);
     z-index: 100;
     padding: 24px;
   }
@@ -134,7 +154,7 @@
     position: sticky; top: 0; z-index: 20;
     display: flex; align-items: center; gap: 14px;
     padding: 12px 20px;
-    background: rgba(13,17,23,.85);
+    background: var(--glass);
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
@@ -168,7 +188,7 @@
   }
   .bulk-bar {
     position: sticky; top: 57px; z-index: 15;
-    background: rgba(13,17,23,.9); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    background: var(--glass); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border); padding: 10px 20px;
   }
   .bulk-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; }
@@ -177,7 +197,7 @@
     background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text-dim);
   }
   .tag-chip:hover { border-color: #3a424e; color: var(--text); }
-  .tag-chip.active { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+  .tag-chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 
   main { flex: 1; padding: 22px 20px 60px; max-width: 1280px; margin: 0 auto; width: 100%; }
 
@@ -187,7 +207,7 @@
     position: absolute; top: 8px; right: 8px; z-index: 3;
     width: 24px; height: 24px;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(20,25,33,.92); border: 1px solid var(--border); border-radius: 6px;
+    background: var(--chip); border: 1px solid var(--border); border-radius: 6px;
   }
   .sel-box input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
   .card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
@@ -220,7 +240,7 @@
   .thumb {
     position: relative;
     height: 165px;
-    background: #0a0d12;
+    background: var(--thumb-bg);
     overflow: hidden;
     /* iOS Safari ignores overflow:hidden for <iframe> and expands it to its
        content width (often 980px for viewport-less artifacts), which leaks out
@@ -254,7 +274,7 @@
   .thumb:hover .overlay { background: rgba(8,11,16,.45); }
   .thumb .overlay span {
     opacity: 0; transition: opacity .15s;
-    background: rgba(20,25,33,.9); border: 1px solid var(--border);
+    background: var(--chip); border: 1px solid var(--border);
     padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600;
   }
   .thumb:hover .overlay span { opacity: 1; }
@@ -262,17 +282,17 @@
     position: absolute; top: 8px; left: 8px;
     font-size: 11px; font-weight: 600;
     padding: 3px 8px; border-radius: 20px;
-    background: rgba(20,25,33,.9); border: 1px solid var(--border);
+    background: var(--chip); border: 1px solid var(--border);
     color: var(--text-dim);
   }
   .pin-btn {
     position: absolute; top: 6px; right: 6px; z-index: 3;
     width: 28px; height: 28px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(20,25,33,.82); border: 1px solid var(--border);
+    background: var(--chip); border: 1px solid var(--border);
     color: var(--text-dim); font-size: 15px; line-height: 1; cursor: pointer;
   }
-  .pin-btn.on { color: #ffce54; border-color: #6b5a23; background: rgba(40,33,12,.85); }
+  .pin-btn.on { color: #f5b301; border-color: var(--border); background: var(--chip); }
   .pin-btn:hover { color: #ffce54; }
   .card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
   .card-title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
