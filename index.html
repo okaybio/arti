@@ -234,6 +234,28 @@
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 18px;
   }
+  /* compact: smaller cards, more per row, title-only */
+  .grid.compact { grid-template-columns: repeat(auto-fill, minmax(min(100%, 158px), 1fr)); gap: 12px; }
+  .grid.compact .thumb { height: 104px; }
+  .grid.compact .card-meta, .grid.compact .card-tags, .grid.compact .card-actions { display: none; }
+  .grid.compact .card-body { padding: 8px 10px; }
+  .grid.compact .card-title { font-size: 12.5px; }
+  .grid.compact .type-badge { display: none; }
+  /* list: one scannable row per item, no thumbnail render */
+  .grid.list { display: flex; flex-direction: column; gap: 8px; }
+  .list-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 10px;
+  }
+  .list-row.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .list-row .li-ic { font-size: 17px; width: 22px; text-align: center; flex: none; }
+  .list-row .li-main { flex: 1; min-width: 0; cursor: pointer; }
+  .list-row .li-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-row .li-meta { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-row .li-actions { display: flex; gap: 4px; flex: none; }
+  .list-row .li-actions .btn { padding: 6px 9px; }
+  .list-row .pin-btn { position: static; width: 30px; height: 30px; flex: none; }
   .card {
     background: var(--bg-elev);
     border: 1px solid var(--border);
@@ -408,10 +430,10 @@
     }
     header.top {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
       grid-template-areas:
-        "brand  add  menu"
-        "search sort select";
+        "brand  brand add  menu"
+        "search view  sort select";
       gap: 8px 8px;
       padding: 10px 12px;
       align-items: center;
@@ -422,6 +444,7 @@
     #menuBtn { grid-area: menu; }
     .search { grid-area: search; max-width: none; min-width: 0; }
     .search input { min-width: 0; }
+    #viewBtn { grid-area: view; }
     #sortSelect { grid-area: sort; }
     #selectBtn { grid-area: select; }
     .count-pill, header.top .spacer { display: none; }
@@ -480,6 +503,7 @@
     </div>
     <span class="count-pill" id="countPill"></span>
     <div class="spacer"></div>
+    <button class="btn" id="viewBtn" title="보기 전환 (카드/컴팩트/리스트)">▦</button>
     <select id="sortSelect" class="select">
       <option value="new">최신순</option>
       <option value="old">오래된순</option>
@@ -639,6 +663,7 @@ let store = { artifacts: [] };
 let sortMode = "new";
 let tagFilter = null;        // active tag, or null
 let currentCollection = "ALL";   // "ALL" | null (미분류) | collection id
+let viewMode = localStorage.getItem("arti.view") || "card";   // card | compact | list
 let selectMode = false;
 let selected = new Set();
 
@@ -1066,12 +1091,39 @@ function renderGrid() {
   $("countPill").textContent = `${store.artifacts.length}개`;
 
   const grid = $("grid"), empty = $("emptyState");
+  grid.className = "grid" + (viewMode === "compact" ? " compact" : viewMode === "list" ? " list" : "");
   grid.innerHTML = "";
   if (store.artifacts.length === 0) { empty.classList.remove("hidden"); updateBulkBar(); return; }
   empty.classList.add("hidden");
 
   if (items.length === 0) {
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="big">🔍</div><h2>결과 없음</h2></div>`;
+    updateBulkBar(); return;
+  }
+
+  if (viewMode === "list") {
+    for (const a of items) {
+      const isLink = a.type === "link";
+      const row = document.createElement("div");
+      row.className = "list-row" + (selected.has(a.id) ? " selected" : "");
+      const selBox = selectMode
+        ? `<div class="sel-box" style="position:static"><input type="checkbox" data-sel="${a.id}" ${selected.has(a.id) ? "checked" : ""}></div>` : "";
+      const pinBtn = selectMode ? ""
+        : `<button class="pin-btn ${a.pinned ? "on" : ""}" data-act="pin" data-id="${a.id}">${a.pinned ? "★" : "☆"}</button>`;
+      row.innerHTML = `
+        ${selBox}
+        <span class="li-ic">${isLink ? "🔗" : "📄"}</span>
+        <div class="li-main" data-act="open" data-id="${a.id}">
+          <div class="li-title">${esc(a.title || "(제목 없음)")}</div>
+          <div class="li-meta">${fmtDate(a.createdAt)}${a.tags && a.tags.length ? " · " + esc(a.tags.join(", ")) : ""}</div>
+        </div>
+        ${pinBtn}
+        <div class="li-actions">
+          <button class="btn sm" data-act="edit" data-id="${a.id}">✏️</button>
+          <button class="btn sm danger" data-act="delete" data-id="${a.id}">🗑</button>
+        </div>`;
+      grid.appendChild(row);
+    }
     updateBulkBar(); return;
   }
 
@@ -1131,7 +1183,7 @@ $("grid").addEventListener("click", (e) => {
     const a = store.artifacts.find(x => x.id === actBtn.dataset.id);
     if (!a) return;
     const act = actBtn.dataset.act;
-    if (act === "open") openArtifact(a);
+    if (act === "open") { if (selectMode) toggleSelect(a.id); else openArtifact(a); }
     else if (act === "edit") openEditModal(a);
     else if (act === "download") downloadArtifact(a);
     else if (act === "delete") confirmDelete(a);
@@ -1233,6 +1285,19 @@ function openFolderPicker(title, cb) {
 }
 
 $("sortSelect").addEventListener("change", (e) => { sortMode = e.target.value; renderGrid(); });
+
+const VIEW_MODES = ["card", "compact", "list"];
+const VIEW_ICON = { card: "▦", compact: "▤", list: "☰" };
+const VIEW_NAME = { card: "카드", compact: "컴팩트", list: "리스트" };
+function applyViewIcon() { $("viewBtn").textContent = VIEW_ICON[viewMode] || "▦"; }
+$("viewBtn").addEventListener("click", () => {
+  viewMode = VIEW_MODES[(VIEW_MODES.indexOf(viewMode) + 1) % VIEW_MODES.length];
+  localStorage.setItem("arti.view", viewMode);
+  applyViewIcon();
+  renderGrid();
+  toast("보기: " + VIEW_NAME[viewMode]);
+});
+applyViewIcon();
 
 function openArtifact(a) {
   if (a.type === "link") { window.open(a.content, "_blank", "noopener"); return; }
