@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
 <meta name="apple-mobile-web-app-title" content="Gallery" />
 <script>try{if(localStorage.getItem('arti.theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style>
@@ -113,7 +113,7 @@
     display: flex; align-items: center; justify-content: center;
     background: var(--lock-bg);
     z-index: 100;
-    padding: calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 24px 24px calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .lock-card {
     width: 100%; max-width: 380px;
@@ -154,7 +154,6 @@
     position: sticky; top: 0; z-index: 20;
     display: flex; align-items: center; gap: 14px;
     padding: 12px 20px;
-    padding-top: calc(12px + env(safe-area-inset-top, 0px));
     padding-left: calc(20px + env(safe-area-inset-left, 0px));
     padding-right: calc(20px + env(safe-area-inset-right, 0px));
     background: var(--glass);
@@ -396,7 +395,6 @@
   .viewer-bar {
     display: flex; align-items: center; gap: 12px;
     padding: 10px 16px; border-bottom: 1px solid var(--border);
-    padding-top: calc(10px + env(safe-area-inset-top, 0px));
     padding-left: calc(16px + env(safe-area-inset-left, 0px));
     padding-right: calc(16px + env(safe-area-inset-right, 0px));
     background: var(--bg-elev);
@@ -471,7 +469,6 @@
         "search view  sort select";
       gap: 8px 8px;
       padding: 10px 12px;
-      padding-top: calc(10px + env(safe-area-inset-top, 0px));
       padding-left: calc(12px + env(safe-area-inset-left, 0px));
       padding-right: calc(12px + env(safe-area-inset-right, 0px));
       align-items: center;
