@@ -181,11 +181,17 @@
   }
   .select:focus { border-color: var(--accent); }
 
-  .filter-bar, .bulk-bar {
+  .filter-bar, .bulk-bar, .folder-bar {
     max-width: 1280px; margin: 0 auto; width: 100%;
     padding: 10px 20px 0;
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   }
+  .folder-bar { padding-top: 14px; }
+  .crumb { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--text-dim); }
+  .crumb a { color: var(--text-dim); cursor: pointer; }
+  .crumb a:hover { color: var(--text); text-decoration: underline; }
+  .crumb .cur { color: var(--text); font-weight: 600; }
+  .folder-sep { color: var(--text-dim); opacity: .6; }
   .bulk-bar {
     position: sticky; top: 57px; z-index: 15;
     background: var(--glass); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
@@ -470,7 +476,7 @@
     <div class="brand"><span class="dot">🎨</span><span>Artifact Gallery</span></div>
     <div class="search">
       <span class="ic">🔎</span>
-      <input id="searchInput" type="text" placeholder="제목 검색…" />
+      <input id="searchInput" type="text" placeholder="검색…" />
     </div>
     <span class="count-pill" id="countPill"></span>
     <div class="spacer"></div>
@@ -484,12 +490,14 @@
     <button class="btn" id="menuBtn">⋯</button>
   </header>
 
+  <div id="folderBar" class="folder-bar hidden"></div>
   <div id="filterBar" class="filter-bar hidden"></div>
 
   <div id="bulkBar" class="bulk-bar hidden">
     <label class="bulk-check"><input type="checkbox" id="selectAll" /> 전체 선택</label>
     <span id="selCount" class="count-pill">0개 선택</span>
     <div class="spacer"></div>
+    <button class="btn sm" id="bulkMove">📁 이동</button>
     <button class="btn sm" id="bulkExport">⬇ 내보내기</button>
     <button class="btn sm danger" id="bulkDelete">🗑 삭제</button>
     <button class="btn sm ghost" id="selectCancel">완료</button>
@@ -630,6 +638,7 @@ let store = { artifacts: [] };
 // view state
 let sortMode = "new";
 let tagFilter = null;        // active tag, or null
+let currentCollection = "ALL";   // "ALL" | null (미분류) | collection id
 let selectMode = false;
 let selected = new Set();
 
@@ -710,7 +719,7 @@ $("lockForm").addEventListener("submit", async (e) => {
       const salt = crypto.getRandomValues(new Uint8Array(16));
       saltB64 = b64(salt);
       cryptoKey = await deriveKey(pw, salt);
-      store = { artifacts: [] };
+      store = { artifacts: [], collections: [] };
       await persist();
       enterApp();
     } else {
@@ -726,6 +735,8 @@ $("lockForm").addEventListener("submit", async (e) => {
       }
       cryptoKey = key;
       store = data && data.artifacts ? data : { artifacts: [] };
+      if (!Array.isArray(store.collections)) store.collections = [];
+      currentCollection = "ALL";
       // upgrade a legacy (localStorage / uncompressed) vault to IndexedDB + gzip
       if (vault.v !== 2) {
         try { await persist(); localStorage.removeItem(STORAGE_KEY); } catch {}
@@ -748,8 +759,8 @@ function enterApp() {
 
 function lockApp() {
   stopAutolock();
-  cryptoKey = null; store = { artifacts: [] };
-  selectMode = false; selected.clear(); tagFilter = null;
+  cryptoKey = null; store = { artifacts: [], collections: [] };
+  selectMode = false; selected.clear(); tagFilter = null; currentCollection = "ALL";
   $("bulkBar").classList.add("hidden");
   appEl.classList.add("hidden");
   $("viewer").classList.add("hidden");
@@ -826,7 +837,8 @@ async function forkArtifact(a) {
     type: a.type,
     title: (a.title || "제목 없음") + " (사본)",
     content: a.content,
-    tags: [...(a.tags || [])]
+    tags: [...(a.tags || [])],
+    collectionId: a.collectionId || null
   });
 }
 async function restoreVersion(id, content) {
@@ -834,6 +846,156 @@ async function restoreVersion(id, content) {
 }
 function parseTags(str) {
   return [...new Set((str || "").split(",").map(s => s.trim()).filter(Boolean))];
+}
+
+// ===================== Collections (folders) =====================
+function collections() { return store.collections || (store.collections = []); }
+function collectionById(id) { return collections().find(c => c.id === id) || null; }
+function childCollections(parentId) {
+  return collections().filter(c => (c.parentId || null) === (parentId || null))
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+}
+function collectionPath(id) {   // [root..this]
+  const path = []; let c = collectionById(id);
+  while (c) { path.unshift(c); c = c.parentId ? collectionById(c.parentId) : null; }
+  return path;
+}
+function descendantIds(id) {
+  const out = []; const walk = (pid) => childCollections(pid).forEach(c => { out.push(c.id); walk(c.id); });
+  walk(id); return out;
+}
+function countIn(scope) {   // direct count for a collection scope
+  return store.artifacts.filter(a =>
+    scope === "ALL" ? true : scope === null ? !a.collectionId : a.collectionId === scope).length;
+}
+async function createCollection(name, parentId) {
+  name = (name || "").trim(); if (!name) return null;
+  const c = { id: uid(), name, parentId: parentId || null, createdAt: Date.now() };
+  collections().push(c);
+  try { await persist(); } catch (e) { collections().pop(); toast(storageErr(e)); return null; }
+  return c;
+}
+async function renameCollection(id, name) {
+  const c = collectionById(id); if (!c) return;
+  name = (name || "").trim(); if (!name) return;
+  const old = c.name; c.name = name;
+  try { await persist(); } catch (e) { c.name = old; toast(storageErr(e)); }
+}
+async function deleteCollection(id) {
+  const c = collectionById(id); if (!c) return;
+  const parent = c.parentId || null;
+  // reparent direct child folders + move artifacts up to this folder's parent
+  collections().forEach(x => { if ((x.parentId || null) === id) x.parentId = parent; });
+  store.artifacts.forEach(a => { if (a.collectionId === id) a.collectionId = parent; });
+  store.collections = collections().filter(x => x.id !== id);
+  try { await persist(); } catch (e) { toast(storageErr(e)); }
+  if (currentCollection === id) currentCollection = parent || "ALL";
+}
+async function moveArtifacts(ids, collectionId) {
+  store.artifacts.forEach(a => { if (ids.includes(a.id)) a.collectionId = collectionId; });
+  try { await persist(); } catch (e) { toast(storageErr(e)); }
+}
+function setCollection(scope) { currentCollection = scope; renderGrid(); }
+
+// flat list of {id, label} for folder pickers, indented by depth
+function collectionOptions() {
+  const out = []; const walk = (pid, depth) => childCollections(pid).forEach(c => {
+    out.push({ id: c.id, label: " ".repeat(depth * 3) + "📁 " + c.name }); walk(c.id, depth + 1);
+  });
+  walk(null, 0); return out;
+}
+function fillFolderSelect(sel, selectedId) {
+  sel.innerHTML = ['<option value="__none__">📁 미분류 (폴더 없음)</option>']
+    .concat(collectionOptions().map(o => `<option value="${o.id}">${esc(o.label)}</option>`)).join("");
+  sel.value = selectedId || "__none__";
+}
+
+function renderFolderBar() {
+  const bar = $("folderBar");
+  const cols = collections();
+  if (cols.length === 0 && currentCollection === "ALL") { bar.classList.add("hidden"); bar.innerHTML = ""; return; }
+  bar.classList.remove("hidden");
+
+  const chip = (label, scope, active, extra) =>
+    `<button class="tag-chip ${active ? "active" : ""}" data-scope="${scope}" ${extra || ""}>${label}</button>`;
+
+  let html = "";
+  // breadcrumb when inside a folder
+  if (currentCollection !== "ALL" && currentCollection !== null) {
+    const path = collectionPath(currentCollection);
+    html += `<span class="crumb"><a data-scope="ALL">🗂 전체</a>`;
+    path.forEach((c, i) => {
+      html += `<span class="folder-sep">/</span>` +
+        (i === path.length - 1 ? `<span class="cur">${esc(c.name)}</span>` : `<a data-scope="${c.id}">${esc(c.name)}</a>`);
+    });
+    html += `</span>`;
+  } else {
+    html += chip("🗂 전체", "ALL", currentCollection === "ALL");
+    if (countIn(null) > 0 || currentCollection === null)
+      html += chip(`📁 미분류 (${countIn(null)})`, "__none__", currentCollection === null);
+  }
+
+  // child folders of current scope
+  const parentForChildren = (currentCollection === "ALL" || currentCollection === null) ? null : currentCollection;
+  childCollections(parentForChildren).forEach(c => {
+    html += chip(`📁 ${esc(c.name)} (${countIn(c.id)})`, c.id, false);
+  });
+
+  // actions
+  html += `<button class="tag-chip" data-act="newfolder">＋ 폴더</button>`;
+  if (currentCollection !== "ALL" && currentCollection !== null)
+    html += `<button class="tag-chip" data-act="editfolder">✎ 폴더명/삭제</button>`;
+
+  bar.innerHTML = html;
+  bar.querySelectorAll("[data-scope]").forEach(el => {
+    el.onclick = () => { const s = el.dataset.scope; setCollection(s === "ALL" ? "ALL" : s === "__none__" ? null : s); };
+  });
+  const nf = bar.querySelector('[data-act="newfolder"]');
+  if (nf) nf.onclick = async () => {
+    const name = prompt("새 폴더 이름");
+    if (name && name.trim()) {
+      const parent = (currentCollection === "ALL" || currentCollection === null) ? null : currentCollection;
+      await createCollection(name, parent); renderGrid();
+    }
+  };
+  const ef = bar.querySelector('[data-act="editfolder"]');
+  if (ef) ef.onclick = () => openFolderEdit(currentCollection);
+}
+
+function openFolderEdit(id) {
+  const c = collectionById(id); if (!c) return;
+  modalEl = document.createElement("div");
+  modalEl.className = "modal-backdrop";
+  modalEl.innerHTML = `
+    <div class="modal" style="max-width:360px">
+      <div class="modal-head"><h2>폴더</h2><button class="btn ghost" id="mClose">✕</button></div>
+      <div class="modal-body">
+        <label class="lbl">폴더 이름</label>
+        <input type="text" id="fName" value="${esc(c.name)}" />
+        <div class="hint" style="margin-top:10px">삭제하면 안의 항목과 하위 폴더는 상위로 이동합니다.</div>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between">
+        <button class="btn sm danger" id="fDel">🗑 삭제</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="mCancel">취소</button>
+          <button class="btn primary" id="fSave">저장</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modalEl);
+  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+  $("mClose").onclick = closeModal; $("mCancel").onclick = closeModal;
+  $("fSave").onclick = async () => {
+    const n = $("fName").value.trim();
+    if (n && n !== c.name) await renameCollection(id, n);
+    closeModal(); renderGrid();
+  };
+  $("fDel").onclick = async () => {
+    if (confirm(`"${c.name}" 폴더를 삭제할까요? 안의 항목/하위 폴더는 상위로 이동합니다.`)) {
+      await deleteCollection(id); closeModal(); renderGrid();
+    }
+  };
+  setTimeout(() => $("fName").focus(), 50);
 }
 
 // ===================== Rendering =====================
@@ -877,6 +1039,9 @@ function haystack(a) {
 function visibleArtifacts() {
   const q = $("searchInput").value.trim().toLowerCase();
   let items = store.artifacts.filter(a => {
+    // folder scope: ALL = everything, null = unfiled, id = that folder (direct)
+    if (currentCollection === null) { if (a.collectionId) return false; }
+    else if (currentCollection !== "ALL") { if (a.collectionId !== currentCollection) return false; }
     if (q && !haystack(a).includes(q)) return false;   // title + tags + content
     if (tagFilter && !(a.tags || []).includes(tagFilter)) return false;
     return true;
@@ -895,6 +1060,7 @@ async function togglePin(id) {
 }
 
 function renderGrid() {
+  renderFolderBar();
   renderFilterBar();
   const items = visibleArtifacts();
   $("countPill").textContent = `${store.artifacts.length}개`;
@@ -1023,6 +1189,48 @@ $("bulkExport").addEventListener("click", () => {
   triggerDownload(blob, `artifacts-${selected.size}개-${fmtDate(Date.now())}.json`);
   toast(`${selected.size}개 내보냄 (평문 JSON)`);
 });
+$("bulkMove").addEventListener("click", () => {
+  if (selected.size === 0) { toast("선택된 항목이 없습니다"); return; }
+  openFolderPicker("선택 항목 이동", async (target) => {
+    await moveArtifacts([...selected], target);
+    setSelectMode(false);
+    toast("이동 완료");
+  });
+});
+
+// reusable folder picker modal -> cb(collectionId|null)
+function openFolderPicker(title, cb) {
+  const opts = [`<option value="__none__">📁 미분류 (폴더 없음)</option>`]
+    .concat(collectionOptions().map(o => `<option value="${o.id}">${esc(o.label)}</option>`)).join("");
+  modalEl = document.createElement("div");
+  modalEl.className = "modal-backdrop";
+  modalEl.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <div class="modal-head"><h2>${esc(title)}</h2><button class="btn ghost" id="mClose">✕</button></div>
+      <div class="modal-body">
+        <label class="lbl">폴더 선택</label>
+        <select id="fpSel" class="select" style="width:100%">${opts}</select>
+        <button class="btn sm" id="fpNew" style="margin-top:10px">＋ 새 폴더 만들기</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="mCancel">취소</button>
+        <button class="btn primary" id="fpOk">이동</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modalEl);
+  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+  $("mClose").onclick = closeModal; $("mCancel").onclick = closeModal;
+  $("fpNew").onclick = async () => {
+    const name = prompt("새 폴더 이름"); if (!name || !name.trim()) return;
+    const c = await createCollection(name, null);
+    if (c) { const s = $("fpSel"); const o = document.createElement("option"); o.value = c.id; o.textContent = "📁 " + c.name; s.appendChild(o); s.value = c.id; }
+  };
+  $("fpOk").onclick = async () => {
+    const v = $("fpSel").value;
+    closeModal();
+    await cb(v === "__none__" ? null : v);
+  };
+}
 
 $("sortSelect").addEventListener("change", (e) => { sortMode = e.target.value; renderGrid(); });
 
@@ -1161,6 +1369,9 @@ function openAddModal() {
         <label class="lbl">태그 <span style="opacity:.6">(쉼표로 구분, 선택)</span></label>
         <input type="text" id="mTags" placeholder="예: 대시보드, 게임, 실험" />
 
+        <label class="lbl">폴더</label>
+        <select id="mFolder" class="select" style="width:100%"></select>
+
         <div class="pane" data-pane="paste">
           <label class="lbl">HTML 코드</label>
           <textarea class="code" id="mCode" placeholder="<!DOCTYPE html> ... Claude 아티팩트 HTML 전체를 붙여넣으세요"></textarea>
@@ -1188,6 +1399,7 @@ function openAddModal() {
       </div>
     </div>`;
   document.body.appendChild(modalEl);
+  fillFolderSelect($("mFolder"), (currentCollection !== "ALL" && currentCollection !== null) ? currentCollection : null);
 
   modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
   $("mClose").onclick = closeModal;
@@ -1241,6 +1453,7 @@ function openAddModal() {
       if (!/^https?:\/\//i.test(url)) url = "https://" + url;
       art = { type: "link", title: title || url, content: url, tags };
     }
+    art.collectionId = $("mFolder").value === "__none__" ? null : $("mFolder").value;
     const dup = store.artifacts.find(x => x.type === art.type && x.content === art.content);
     if (dup && !confirm(`이미 동일한 내용의 아티팩트가 있어요${dup.title ? ` ("${dup.title}")` : ""}. 그래도 추가할까요?`)) return;
     $("mSave").disabled = true;
@@ -1270,6 +1483,8 @@ function openEditModal(a) {
         <input type="text" id="eTitle" value="${esc(a.title || "")}" />
         <label class="lbl">태그 <span style="opacity:.6">(쉼표로 구분)</span></label>
         <input type="text" id="eTags" value="${esc((a.tags || []).join(", "))}" />
+        <label class="lbl">폴더</label>
+        <select id="eFolder" class="select" style="width:100%"></select>
         <label class="lbl">${isLink ? "URL" : "HTML 코드"}</label>
         ${isLink
           ? `<input type="text" id="eContent" value="${esc(a.content)}" />`
@@ -1287,6 +1502,7 @@ function openEditModal(a) {
       </div>
     </div>`;
   document.body.appendChild(modalEl);
+  fillFolderSelect($("eFolder"), a.collectionId || null);
   modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
   $("mClose").onclick = closeModal; $("mCancel").onclick = closeModal;
   $("eFork").onclick = async () => {
@@ -1303,6 +1519,7 @@ function openEditModal(a) {
       await updateArtifact(a.id, {
         title: $("eTitle").value.trim() || "(제목 없음)",
         tags: parseTags($("eTags").value),
+        collectionId: $("eFolder").value === "__none__" ? null : $("eFolder").value,
         content
       });
       closeModal();
