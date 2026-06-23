@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
 <link rel="manifest" href="manifest.webmanifest" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Gallery" />
 <script>try{if(localStorage.getItem('arti.theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style>
@@ -496,6 +496,16 @@
     .viewer-bar { gap: 8px; padding: 10px 12px; }
     .viewer-bar .vtitle { flex: 1; min-width: 0; }
     #viewerNewTab { white-space: nowrap; }
+  }
+
+  /* Standalone PWA: status bar overlays content (black-translucent), so clear
+     it at the top. env() gives the notch/island inset; the 20px floor covers
+     notchless iPhones where env is 0. Scoped to standalone so Safari (which
+     does not overlay) is not over-padded. */
+  @media (display-mode: standalone) {
+    #app header.top { padding-top: calc(12px + max(env(safe-area-inset-top, 0px), 20px)); }
+    #viewer .viewer-bar { padding-top: calc(10px + max(env(safe-area-inset-top, 0px), 20px)); }
+    #lock { padding-top: calc(24px + max(env(safe-area-inset-top, 0px), 20px)); }
   }
 </style>
 </head>
