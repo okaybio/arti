@@ -1935,7 +1935,9 @@ function beginDrag() {
   const g = el.cloneNode(true);
   g.classList.add("drag-ghost");
   g.style.width = r.width + "px"; g.style.left = r.left + "px"; g.style.top = r.top + "px";
-  document.body.appendChild(g);
+  // append inside #grid (not body) so .grid.compact / .grid.list descendant
+  // styles still apply to the ghost; position:fixed keeps it out of layout
+  $("grid").appendChild(g);
   press.ghost = g;
   el.classList.add("drag-source");
 }
