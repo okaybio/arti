@@ -256,6 +256,10 @@
   .list-row .li-actions { display: flex; gap: 4px; flex: none; }
   .list-row .li-actions .btn { padding: 6px 9px; }
   .list-row .pin-btn { position: static; width: 30px; height: 30px; flex: none; }
+  .card, .list-row {
+    -webkit-user-select: none; user-select: none;   /* no text selection/magnifier on long-press drag */
+    -webkit-touch-callout: none;
+  }
   .card {
     background: var(--bg-elev);
     border: 1px solid var(--border);
@@ -1930,6 +1934,7 @@ document.addEventListener("pointercancel", endPress);
 
 function beginDrag() {
   press.dragging = true;
+  try { window.getSelection().removeAllRanges(); } catch {}   // drop any text selection from the press
   const el = press.itemEl, r = el.getBoundingClientRect();
   press.offX = press.lastX - r.left; press.offY = press.lastY - r.top;
   const g = el.cloneNode(true);
